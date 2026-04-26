@@ -14,6 +14,8 @@ import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import {
   useBrowserUseSettings,
+  useChatGptLogin,
+  useChatGptStatus,
   useChromeProfiles,
   useCustomMcps,
 } from "@/lib/use-settings";
@@ -407,6 +409,104 @@ function BrowserUsePanel() {
   );
 }
 
+function ProvidersPanel() {
+  const chatgpt = useChatGptStatus();
+  const login = useChatGptLogin(chatgpt.refresh);
+
+  return (
+    <div className="flex h-full flex-col gap-4 overflow-y-auto">
+      <div>
+        <h3 className="text-sm font-medium">Providers</h3>
+        <p className="text-xs text-muted-foreground mt-1">
+          Connect optional provider accounts without affecting your existing
+          OpenRouter or Ollama setup.
+        </p>
+      </div>
+
+      <div className="rounded-lg border px-4 py-3 flex flex-col gap-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-xs font-medium">ChatGPT Pro</div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">
+              Use your ChatGPT Pro account to unlock GPT-5.x models for both
+              Kady and delegated experts.
+            </div>
+          </div>
+          {chatgpt.status.authenticated ? (
+            <span className="rounded-full bg-primary/10 px-2 py-1 text-[10px] font-medium text-primary">
+              Connected
+            </span>
+          ) : null}
+        </div>
+
+        {chatgpt.loading ? (
+          <div className="flex items-center text-xs text-muted-foreground">
+            <LoaderCircleIcon className="mr-2 size-3.5 animate-spin" />
+            Checking status...
+          </div>
+        ) : chatgpt.status.authenticated ? (
+          <>
+            <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs">
+              <div className="font-medium">Connected to ChatGPT Pro</div>
+              <div className="mt-1 text-muted-foreground">
+                {chatgpt.status.modelsAvailable} models available
+                {chatgpt.status.accountId ? ` · ${chatgpt.status.accountId}` : ""}
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button size="sm" variant="outline" onClick={() => void login.logout()} disabled={login.loading}>
+                Disconnect
+              </Button>
+            </div>
+          </>
+        ) : login.pending.loginSessionId ? (
+          <div className="flex flex-col gap-3 rounded-md border bg-muted/30 px-3 py-3 text-xs">
+            <div className="font-medium">Finish sign-in in your browser</div>
+            <div className="text-muted-foreground">
+              Open <code>{login.pending.verificationUri}</code> and enter code <code>{login.pending.userCode}</code>.
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="outline" onClick={login.clearPending} disabled={login.loading}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={() => void login.poll()} disabled={login.loading}>
+                {login.loading ? (
+                  <>
+                    <LoaderCircleIcon className="size-3.5 animate-spin" />
+                    Checking...
+                  </>
+                ) : (
+                  "Check sign-in status"
+                )}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex justify-end">
+            <Button size="sm" onClick={() => void login.start()} disabled={login.loading}>
+              {login.loading ? (
+                <>
+                  <LoaderCircleIcon className="size-3.5 animate-spin" />
+                  Connecting...
+                </>
+              ) : (
+                "Connect ChatGPT Pro"
+              )}
+            </Button>
+          </div>
+        )}
+
+        {(chatgpt.error || chatgpt.status.error || login.error) && (
+          <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+            <AlertCircleIcon className="size-3.5 shrink-0" />
+            {login.error ?? chatgpt.error ?? chatgpt.status.error}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function SettingsDialog({
   open,
   onOpenChange,
@@ -451,6 +551,13 @@ export function SettingsDialog({
               <GlobeIcon className="size-3.5" />
               Browser
             </TabsTrigger>
+            <TabsTrigger
+              value="providers"
+              className="justify-start gap-2 px-3 text-xs w-full"
+            >
+              <InfoIcon className="size-3.5" />
+              Providers
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="mcps" className="flex-1 min-h-0 p-5">
@@ -458,6 +565,9 @@ export function SettingsDialog({
           </TabsContent>
           <TabsContent value="browser" className="flex-1 min-h-0 p-5">
             <BrowserUsePanel />
+          </TabsContent>
+          <TabsContent value="providers" className="flex-1 min-h-0 p-5">
+            <ProvidersPanel />
           </TabsContent>
         </Tabs>
       </DialogContent>

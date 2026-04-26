@@ -214,3 +214,185 @@ export function useChromeProfiles(): UseChromeProfilesReturn {
 
   return { profiles, loading, error, refresh: fetchProfiles };
 }
+
+export interface ChatGptStatus {
+  authenticated: boolean;
+  accountId: string | null;
+  lastRefresh: string | null;
+  modelsAvailable: number;
+  error: string | null;
+}
+
+export const DEFAULT_CHATGPT_STATUS: ChatGptStatus = {
+  authenticated: false,
+  accountId: null,
+  lastRefresh: null,
+  modelsAvailable: 0,
+  error: null,
+};
+
+export interface UseChatGptStatusReturn {
+  status: ChatGptStatus;
+  loading: boolean;
+  error: string | null;
+  refresh: () => Promise<void>;
+}
+
+export function useChatGptStatus(): UseChatGptStatusReturn {
+  const [status, setStatus] = useState<ChatGptStatus>(DEFAULT_CHATGPT_STATUS);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchStatus = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await apiFetch(`/settings/chatgpt/status`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data: Partial<ChatGptStatus> = await res.json();
+      setStatus({ ...DEFAULT_CHATGPT_STATUS, ...data });
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to load");
+      setStatus(DEFAULT_CHATGPT_STATUS);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchStatus();
+  }, [fetchStatus]);
+
+  useEffect(
+    () => onProjectChange(() => {
+      void fetchStatus();
+    }),
+    [fetchStatus],
+  );
+
+  return { status, loading, error, refresh: fetchStatus };
+}
+
+export interface ChatGptLoginPending {
+  loginSessionId: string | null;
+  verificationUri: string | null;
+  userCode: string | null;
+  pollIntervalSeconds: number;
+}
+
+const DEFAULT_CHATGPT_LOGIN_PENDING: ChatGptLoginPending = {
+  loginSessionId: null,
+  verificationUri: null,
+  userCode: null,
+  pollIntervalSeconds: 5,
+};
+
+export interface UseChatGptLoginReturn {
+  pending: ChatGptLoginPending;
+  loading: boolean;
+  error: string | null;
+  start: () => Promise<boolean>;
+  poll: () => Promise<"pending" | "authenticated" | false>;
+  logout: () => Promise<boolean>;
+  clearPending: () => void;
+}
+
+export function useChatGptLogin(
+  refreshStatus: () => Promise<void>,
+): UseChatGptLoginReturn {
+  const [pending, setPending] = useState<ChatGptLoginPending>(
+    DEFAULT_CHATGPT_LOGIN_PENDING,
+  );
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const clearPending = useCallback(() => {
+    setPending(DEFAULT_CHATGPT_LOGIN_PENDING);
+  }, []);
+
+  const start = useCallback(async (): Promise<boolean> => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await apiFetch(`/settings/chatgpt/login/start`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setPending({
+        loginSessionId: data.loginSessionId ?? null,
+        verificationUri: data.verificationUri ?? null,
+        userCode: data.userCode ?? null,
+        pollIntervalSeconds: Number(data.pollIntervalSeconds ?? 5) || 5,
+      });
+      return true;
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to start login");
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const poll = useCallback(async (): Promise<"pending" | "authenticated" | false> => {
+    if (!pending.loginSessionId) {
+      return false;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await apiFetch(`/settings/chatgpt/login/poll`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ loginSessionId: pending.loginSessionId }),
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      if (data.status === "authenticated") {
+        clearPending();
+        await refreshStatus();
+        window.dispatchEvent(new Event("kady:modelsChanged"));
+        return "authenticated";
+      }
+      return "pending";
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to poll login");
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }, [clearPending, pending.loginSessionId, refreshStatus]);
+
+  const logout = useCallback(async (): Promise<boolean> => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await apiFetch(`/settings/chatgpt/auth`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(detail || `HTTP ${res.status}`);
+      }
+      clearPending();
+      await refreshStatus();
+      window.dispatchEvent(new Event("kady:modelsChanged"));
+      return true;
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to disconnect");
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }, [clearPending, refreshStatus]);
+
+  return { pending, loading, error, start, poll, logout, clearPending };
+}

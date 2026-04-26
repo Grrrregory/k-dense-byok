@@ -32,7 +32,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import { Streamdown } from "streamdown";
+import { Streamdown, type Components, type ExtraProps } from "streamdown";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -342,7 +342,7 @@ function hasImageChild(children: ReactNode): boolean {
 }
 
 const SafeParagraph = memo(
-  ({ children, node, ...rest }: Record<string, unknown> & { children?: ReactNode; node?: unknown }) => {
+  ({ children, node, ...rest }: ComponentProps<"p"> & ExtraProps) => {
     const kids = (Array.isArray(children) ? children : [children]).filter(
       (c) => c != null && c !== ""
     ) as ReactNode[];
@@ -363,7 +363,7 @@ const SafeParagraph = memo(
 );
 SafeParagraph.displayName = "SafeParagraph";
 
-const streamdownComponents = { p: SafeParagraph } as ComponentProps<typeof Streamdown>["components"];
+const streamdownComponents: Partial<Components> = { p: SafeParagraph };
 
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (

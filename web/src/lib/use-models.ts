@@ -13,9 +13,18 @@ interface OllamaListResponse {
   models?: Model[];
 }
 
+interface ChatGptListResponse {
+  available?: boolean;
+  models?: Model[];
+}
+
 export interface UseModelsReturn {
-  /** Every model available to the user: static OpenRouter catalogue + live Ollama tags. */
+  /** Every model available to the user: static OpenRouter catalogue + live ChatGPT + live Ollama tags. */
   models: Model[];
+  /** Just the ChatGPT-sourced entries, in the order returned by the backend. */
+  chatgptModels: Model[];
+  /** True when the backend reports ChatGPT models are available for the authenticated account. */
+  chatgptAvailable: boolean;
   /** Just the Ollama-sourced entries, in the order returned by the backend. */
   ollamaModels: Model[];
   /** True when the backend was able to reach `OLLAMA_BASE_URL/api/tags`. */
@@ -33,8 +42,24 @@ export interface UseModelsReturn {
  * keep the list fresh when the user returns after pulling a new model.
  */
 export function useModels(): UseModelsReturn {
+  const [chatgptModels, setChatgptModels] = useState<Model[]>([]);
+  const [chatgptAvailable, setChatgptAvailable] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<Model[]>([]);
   const [ollamaAvailable, setOllamaAvailable] = useState(false);
+
+  const fetchChatGpt = useCallback(() => {
+    apiFetch("/chatgpt/models")
+      .then((r) => (r.ok ? (r.json() as Promise<ChatGptListResponse>) : null))
+      .then((data) => {
+        if (!data) return;
+        setChatgptAvailable(Boolean(data.available));
+        setChatgptModels(Array.isArray(data.models) ? data.models : []);
+      })
+      .catch(() => {
+        setChatgptAvailable(false);
+        setChatgptModels([]);
+      });
+  }, []);
 
   const fetchOllama = useCallback(() => {
     apiFetch("/ollama/models")
@@ -51,15 +76,38 @@ export function useModels(): UseModelsReturn {
   }, []);
 
   useEffect(() => {
+    fetchChatGpt();
     fetchOllama();
-  }, [fetchOllama]);
+  }, [fetchChatGpt, fetchOllama]);
 
-  useEffect(() => onProjectChange(() => fetchOllama()), [fetchOllama]);
+  useEffect(
+    () => onProjectChange(() => {
+      fetchChatGpt();
+      fetchOllama();
+    }),
+    [fetchChatGpt, fetchOllama],
+  );
+
+  useEffect(() => {
+    const handleModelsChanged = () => {
+      fetchChatGpt();
+      fetchOllama();
+    };
+    window.addEventListener("kady:modelsChanged", handleModelsChanged);
+    return () => window.removeEventListener("kady:modelsChanged", handleModelsChanged);
+  }, [fetchChatGpt, fetchOllama]);
+
+  const refresh = useCallback(() => {
+    fetchChatGpt();
+    fetchOllama();
+  }, [fetchChatGpt, fetchOllama]);
 
   return {
-    models: [...OPENROUTER_MODELS, ...ollamaModels],
+    models: [...OPENROUTER_MODELS, ...chatgptModels, ...ollamaModels],
+    chatgptModels,
+    chatgptAvailable,
     ollamaModels,
     ollamaAvailable,
-    refresh: fetchOllama,
+    refresh,
   };
 }

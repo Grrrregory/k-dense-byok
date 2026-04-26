@@ -60,6 +60,18 @@ set -a
 source kady_agent/.env
 set +a
 
+# Kady-owned ChatGPT auth store. Both the backend process and the LiteLLM proxy
+# point LiteLLM's ChatGPT provider at this repo-local directory so selecting a
+# chatgpt/* model never triggers an implicit login under ~/.config/litellm.
+if [ -n "${KADY_CHATGPT_AUTH_PATH:-}" ]; then
+    export CHATGPT_TOKEN_DIR="$(dirname "$KADY_CHATGPT_AUTH_PATH")"
+    export CHATGPT_AUTH_FILE="$(basename "$KADY_CHATGPT_AUTH_PATH")"
+else
+    export CHATGPT_TOKEN_DIR="$PWD/kady_agent/.chatgpt"
+    export CHATGPT_AUTH_FILE="auth.json"
+fi
+mkdir -p "$CHATGPT_TOKEN_DIR"
+
 # ---- Step 4: Prepare the sandbox ----
 
 echo "Preparing sandbox (creates sandbox/ dir, downloads scientific skills from K-Dense)..."

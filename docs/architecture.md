@@ -58,6 +58,10 @@ k-dense-byok/
 
 ## A note on the expert model
 
-The model you select in Kady's dropdown only applies to Kady (the main agent). When Kady delegates a task, the expert runs through the **Gemini CLI**, which always uses a Gemini model on [OpenRouter](https://openrouter.ai/) regardless of your dropdown choice.
+The model you select in Kady's dropdown always applies to Kady (the main agent). When Kady delegates a task, the expert runner depends on the selected expert model:
 
-The one exception is local Ollama models - if you pick an Ollama model, both Kady and the expert run through your local daemon. See [Local models with Ollama](./local-models-ollama.md).
+- OpenRouter-hosted models (for example `openrouter/...`) run through the Gemini CLI expert runner via the local LiteLLM proxy.
+- ChatGPT Pro-authenticated GPT-5.x models (for example `chatgpt/gpt-5.4`) run through a Codex CLI expert runner with isolated ChatGPT auth.
+- local Ollama models (`ollama/...`) run through the Gemini CLI expert runner.
+
+Both expert runners share the same sandbox, project-scoped MCP configuration, and provenance/manifest plumbing. The orchestrator decides when to delegate; the selected provider/runtime decides how the delegated expert executes.

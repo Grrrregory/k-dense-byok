@@ -153,6 +153,20 @@ async def test_sandbox_file_rejects_path_traversal(asgi_client):
     assert resp.status_code == 403
 
 
+async def test_sandbox_file_rejects_hidden_runtime_paths(asgi_client, active_project):
+    secret = active_project.sandbox / ".kady" / "secret.txt"
+    secret.parent.mkdir(parents=True, exist_ok=True)
+    secret.write_text("top-secret", encoding="utf-8")
+
+    resp = await asgi_client.get("/sandbox/file", params={"path": ".kady/secret.txt"})
+    assert resp.status_code == 403
+
+    resp = await asgi_client.put(
+        "/sandbox/file", params={"path": ".kady/new-secret.txt"}, content=b"hidden"
+    )
+    assert resp.status_code == 403
+
+
 async def test_sandbox_file_not_found(asgi_client):
     resp = await asgi_client.get("/sandbox/file", params={"path": "missing.txt"})
     assert resp.status_code == 404
@@ -267,6 +281,30 @@ async def test_revise_markdown_calls_litellm(asgi_client, no_litellm, monkeypatc
     body = resp.json()
     assert body["revised"] == "stub revised text"
     assert body["model"] == "openrouter/x/y"
+
+
+async def test_revise_markdown_injects_chatgpt_credentials(asgi_client, no_litellm, monkeypatch):
+    from kady_agent import agent as agent_module
+
+    monkeypatch.setattr(agent_module, "DEFAULT_MODEL", "chatgpt/gpt-5.4")
+    monkeypatch.setattr(
+        "server.resolve_chatgpt_runtime_credentials",
+        lambda **kwargs: {
+            "api_key": "chatgpt-access-token",
+            "base_url": "https://chatgpt.com/backend-api/codex",
+        },
+    )
+
+    resp = await asgi_client.post(
+        "/revise-markdown",
+        json={"selection": "hello", "instruction": "make it shout"},
+    )
+    assert resp.status_code == 200
+    kwargs = no_litellm["calls"][-1]
+    assert kwargs["model"] == "chatgpt/gpt-5.4"
+    assert kwargs["api_key"] == "chatgpt-access-token"
+    assert kwargs["api_base"] == "https://chatgpt.com/backend-api/codex"
+    assert kwargs["custom_llm_provider"] == "chatgpt"
 
 
 async def test_revise_markdown_requires_selection(asgi_client):

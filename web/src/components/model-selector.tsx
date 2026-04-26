@@ -51,6 +51,7 @@ const PROVIDER_COLORS: Record<string, string> = {
   Google:    "text-blue-600 dark:text-blue-400",
   Anthropic: "text-orange-600 dark:text-orange-400",
   OpenAI:    "text-emerald-600 dark:text-emerald-400",
+  "ChatGPT Pro": "text-emerald-600 dark:text-emerald-400",
   DeepSeek:  "text-cyan-600 dark:text-cyan-400",
   xAI:       "text-rose-600 dark:text-rose-400",
   Meta:      "text-indigo-600 dark:text-indigo-400",
@@ -323,7 +324,7 @@ const TAB_META: Record<PairedTab, { label: string; icon: typeof UsersIcon; hint:
   expert: {
     label: "Expert",
     icon: CpuIcon,
-    hint: "Runs delegated tasks in the Gemini CLI subprocess.",
+    hint: "Runs delegated tasks in a provider-specific expert subprocess (Gemini CLI for OpenRouter/Ollama/Gemini, Codex CLI for ChatGPT Pro models).",
   },
 };
 
@@ -360,8 +361,8 @@ export function PairedModelSelector({
             delegate.
             <br />
             <span className="opacity-80">Expert</span>: <b>{expert.label}</b>{" "}
-            runs delegated tasks (long-context reads, tool-heavy work) in the
-            Gemini CLI subprocess.
+            runs delegated tasks (long-context reads, tool-heavy work) in a
+            provider-specific expert subprocess.
             <br />
             Click to change either.
           </>

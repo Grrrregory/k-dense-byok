@@ -52,6 +52,19 @@ model_list:
         HTTP-Referer: "https://www.k-dense.ai"
         X-Title: "Kady-Expert"
 
+  # ── ChatGPT Pro / Codex wildcard ──
+  # Routes any `chatgpt/<model>` id selected in the UI through LiteLLM's
+  # built-in ChatGPT provider. Authentication is owned by Kady via the
+  # repo-local `kady_agent/.chatgpt/auth.json` store; the proxy reads that
+  # state through CHATGPT_TOKEN_DIR / CHATGPT_AUTH_FILE instead of prompting
+  # for an implicit login under ~/.config/litellm.
+  - model_name: "chatgpt/*"
+    litellm_params:
+      model: "chatgpt/*"
+      api_key: "kady-managed-chatgpt-auth"
+      timeout: 600
+      stream_timeout: 600
+
   # ── Local Ollama (no API key required) ──
   # Wildcard so any tag the user pulls into their Ollama server is routable
   # without editing this file. `ollama_chat/*` preserves the model name tag

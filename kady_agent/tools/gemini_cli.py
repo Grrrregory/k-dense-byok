@@ -27,15 +27,33 @@ _CLI_OPENROUTER_HEADERS = (
 )
 
 
+def _unsupported_chatgpt_expert_result(model: str) -> dict:
+    return {
+        "result": (
+            "ChatGPT-authenticated expert models are not supported yet. "
+            f"The delegated expert runtime still runs inside Gemini CLI, and "
+            f"that transport fails for '{model}'. Use a Gemini, OpenRouter, "
+            "or Ollama expert model instead. Recommended fallback: "
+            "openrouter/openai/gpt-5.4."
+        ),
+        "skills_used": [],
+        "tools_used": {},
+        "unsupportedExpertModel": True,
+        "requestedModel": model,
+        "recommendedModel": "openrouter/openai/gpt-5.4",
+    }
+
+
 def _cli_can_route(model: str) -> bool:
     """Return True when the Gemini CLI + our LiteLLM proxy can handle *model*.
 
     The expert subprocess routes through the LiteLLM proxy at
-    ``GOOGLE_GEMINI_BASE_URL``. Only models configured there resolve:
-    the explicit ``gemini-*`` entries, the ``ollama/*`` wildcard, and
-    the ``openrouter/*`` wildcard. Anything else would cause the CLI to
-    hang on a 404 from the proxy, so we drop the ``-m`` flag and let the
-    CLI fall back to its built-in default Gemini model.
+    ``GOOGLE_GEMINI_BASE_URL``. In practice, the Gemini CLI runtime only works
+    reliably here for Gemini-native models plus the OpenRouter/Ollama routes we
+    proxy for it. ``chatgpt/*`` is intentionally excluded even though the
+    orchestrator can call those models directly through LiteLLM: delegated
+    expert runs still execute inside Gemini CLI, and that transport fails for
+    ChatGPT-authenticated models.
     """
     return (
         model.startswith("gemini-")
@@ -187,10 +205,24 @@ async def delegate_task(
 
     cwd.mkdir(parents=True, exist_ok=True)
 
+    state = tool_context.state if tool_context is not None else None
+    routed_model: Optional[str] = None
+    if state is not None:
+        raw_model = state.get("_expertModel") or state.get("_model")
+        if isinstance(raw_model, str) and raw_model.strip():
+            routed_model = raw_model.strip()
+    if routed_model and routed_model.startswith("chatgpt/"):
+        from . import codex_cli
+
+        return await codex_cli.delegate_task(
+            prompt,
+            working_directory=str(cwd),
+            tool_context=tool_context,
+        )
+
     # Reproducibility: stamp turn + delegation identifiers into the env so the
     # expert can name its env.lock / deliverables.json files correctly, and
     # seed every RNG it controls from KADY_SEED.
-    state = tool_context.state if tool_context is not None else None
     turn_id: Optional[str] = None
     session_id: Optional[str] = None
     delegation_id: Optional[str] = None

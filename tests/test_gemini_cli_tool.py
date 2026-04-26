@@ -27,6 +27,7 @@ def test_cli_can_route_whitelist():
     assert gemini_cli._cli_can_route("gemini-pro") is True
     assert gemini_cli._cli_can_route("ollama/llama3") is True
     assert gemini_cli._cli_can_route("openrouter/anthropic/claude-opus-4.7") is True
+    assert gemini_cli._cli_can_route("chatgpt/gpt-5.4") is False
     assert gemini_cli._cli_can_route("anthropic/claude-opus-4.7") is False
 
 
@@ -184,7 +185,10 @@ async def test_delegate_task_records_delegation_when_state_present(
     }
     ctx = types.SimpleNamespace(state=state)
 
+    called = {}
+
     async def fake_exec(*args, **kwargs):
+        called["args"] = args
         # Emit some expert output
         out = json.dumps(
             {"type": "message", "role": "assistant", "content": "done"}
@@ -195,9 +199,42 @@ async def test_delegate_task_records_delegation_when_state_present(
 
     result = await gemini_cli.delegate_task("analyze", tool_context=ctx)
     assert result["result"] == "done"
+    assert "-m" in called["args"]
+    assert "gemini-pro" in called["args"]
 
     # Manifest now has one delegation recorded.
     manifest = manifest_module.read_manifest("s1", turn_id)
     assert manifest is not None
     assert len(manifest["delegations"]) == 1
     assert manifest["delegations"][0]["id"] == "001"
+
+
+async def test_delegate_task_routes_chatgpt_expert_models_to_codex(
+    active_project, monkeypatch
+):
+    state = {
+        "_sessionId": "s1",
+        "_turnId": "t1",
+        "_expertModel": "chatgpt/gpt-5.4",
+    }
+    ctx = types.SimpleNamespace(state=state)
+    called: dict[str, object] = {}
+
+    async def fake_gemini_exec(*args, **kwargs):
+        raise AssertionError("chatgpt/* expert models must not spawn gemini")
+
+    async def fake_codex_delegate(prompt, working_directory=None, tool_context=None):
+        called["prompt"] = prompt
+        called["working_directory"] = working_directory
+        called["tool_context"] = tool_context
+        return {"result": "done", "skills_used": [], "tools_used": {"command_execution": 1}}
+
+    monkeypatch.setattr(gemini_cli.asyncio, "create_subprocess_exec", fake_gemini_exec)
+    monkeypatch.setattr("kady_agent.tools.codex_cli.delegate_task", fake_codex_delegate)
+
+    result = await gemini_cli.delegate_task("analyze", tool_context=ctx)
+    assert result == {"result": "done", "skills_used": [], "tools_used": {"command_execution": 1}}
+    assert called["prompt"] == "analyze"
+    assert called["working_directory"] == str(active_project.sandbox)
+    assert called["tool_context"] is ctx
+    assert state.get("_delegation_counter_t1") is None

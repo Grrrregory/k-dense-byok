@@ -30,6 +30,6 @@ Two transport types are supported:
 
 ## How it's stored
 
-- Your custom servers are **merged** with the built-in defaults (Docling and Parallel) and passed to the Gemini CLI.
-- The configuration is saved **per project** in `projects/<project-id>/custom_mcps.json` (outside the `sandbox/` folder) so it survives sandbox deletion and app restarts.
+- Your custom servers are merged with the built-in defaults and passed to the active expert runner (Gemini CLI for OpenRouter/Ollama/Gemini expert models, Codex CLI for ChatGPT Pro expert models).
+- The configuration is saved per project in `projects/<project-id>/custom_mcps.json` (outside the `sandbox/` folder) so it survives sandbox deletion and app restarts.
 - Switching projects automatically swaps the MCP set - each project has its own.

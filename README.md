@@ -15,7 +15,7 @@ It is built for scientists, analysts, and curious people who want a powerful AI 
 ## What can it do?
 
 - **Answer questions and take on tasks.** Chat with Kady like any AI assistant. For bigger work, Kady delegates to a specialist "expert" agent that runs with a full Python environment and scientific tools.
-- **Pick any AI model, any time.** Choose from 30+ models across 10 providers (OpenAI, Anthropic, Google, xAI, Qwen, and more) with a simple dropdown. Switch models message to message. You can also use free local models through [Ollama](./docs/local-models-ollama.md).
+- **Pick any AI model, any time.** Choose from 30+ models across 10 providers (OpenAI, Anthropic, Google, xAI, Qwen, and more) with a simple dropdown. Switch models message to message. You can also use ChatGPT Pro-authenticated GPT-5.x models after connecting your account in Settings, or run free local models through [Ollama](./docs/local-models-ollama.md).
 - **170+ scientific skills, pre-installed.** Covers genomics, proteomics, drug discovery, materials science, and more. Kady passes the right skills to the expert automatically for each task.
 - **326 ready-to-run workflow templates.** Browse a built-in library across 22 disciplines - genomics, drug discovery, finance, astrophysics, and more. Pick one, fill in the blanks, and launch.
 - **229 scientific and financial databases.** Connect to databases in 18 categories - Biomedical & Health, Chemistry & Materials, Scholarly Publications, Stock Market, Earth & Climate, Astronomy & Space, and more.
@@ -33,7 +33,8 @@ It is built for scientists, analysts, and curious people who want a powerful AI 
 | What | Why | Where to get it |
 |------|-----|-----------------|
 | A computer running **macOS or Linux** | The app runs locally on your machine | Windows works too - use [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) |
-| An **OpenRouter API key** | This is how the AI models are accessed | [openrouter.ai](https://openrouter.ai/) - sign up and create a key |
+| An **OpenRouter API key** | Simplest way to access hosted models out of the box | [openrouter.ai](https://openrouter.ai/) - sign up and create a key |
+| A **ChatGPT Pro account** *(optional)* | Unlocks ChatGPT-authenticated GPT-5.x models after you connect it in Settings | [chatgpt.com](https://chatgpt.com/) |
 | A **Parallel API key** *(optional)* | Lets Kady search the web | [parallel.ai](https://parallel.ai/) |
 | **Modal** credentials *(optional)* | Only needed for remote GPU/CPU compute | [modal.com](https://modal.com/) |
 
@@ -52,9 +53,11 @@ cd k-dense-byok
 
 ### Step 2 - Add your API keys
 
-Inside the `kady_agent` folder you'll find a file called `env.example`. Make a copy and rename the copy to `.env` (note the dot at the start). Open `.env` in any text editor and paste your **OpenRouter API key** on the first line - that's the only key you need to get started.
+Inside the `kady_agent` folder you'll find a file called `env.example`. Make a copy and rename the copy to `.env` (note the dot at the start). Open `.env` in any text editor and paste your **OpenRouter API key** on the first line - that's still the simplest way to get started.
 
 The file also has sections for other optional keys (Parallel for web search, Modal for remote compute, and many scientific and government database keys). Leave blank anything you don't need.
+
+If you want to use **ChatGPT Pro-authenticated GPT-5.x models**, you do not add another API key. Start the app first, open **Settings → Providers**, and connect your ChatGPT Pro account there.
 
 ### Step 3 - Start the app
 

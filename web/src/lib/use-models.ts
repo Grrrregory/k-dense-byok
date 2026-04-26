@@ -97,15 +97,17 @@ export function useModels(): UseModelsReturn {
     return () => window.removeEventListener("kady:modelsChanged", handleModelsChanged);
   }, [fetchChatGpt, fetchOllama]);
 
+  const refresh = useCallback(() => {
+    fetchChatGpt();
+    fetchOllama();
+  }, [fetchChatGpt, fetchOllama]);
+
   return {
     models: [...OPENROUTER_MODELS, ...chatgptModels, ...ollamaModels],
     chatgptModels,
     chatgptAvailable,
     ollamaModels,
     ollamaAvailable,
-    refresh: () => {
-      fetchChatGpt();
-      fetchOllama();
-    },
+    refresh,
   };
 }

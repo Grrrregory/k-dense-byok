@@ -15,8 +15,7 @@ if (typeof globalThis.ResizeObserver === "undefined") {
     unobserve() {}
     disconnect() {}
   }
-  // @ts-expect-error polyfill
-  globalThis.ResizeObserver = ResizeObserver;
+  globalThis.ResizeObserver = ResizeObserver as typeof globalThis.ResizeObserver;
 }
 
 if (typeof window !== "undefined" && typeof window.matchMedia === "undefined") {

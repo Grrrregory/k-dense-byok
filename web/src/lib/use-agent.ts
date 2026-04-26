@@ -280,18 +280,17 @@ export function useAgent() {
                       return message;
                     }
 
+                    const nextActivity: ActivityItem = {
+                      detail: activity.detail,
+                      id: key,
+                      label: activity.label,
+                      status: "running",
+                      timestamp: Date.now(),
+                    };
+
                     return {
                       ...message,
-                      activities: [
-                        ...activities,
-                        {
-                          detail: activity.detail,
-                          id: key,
-                          label: activity.label,
-                          status: "running",
-                          timestamp: Date.now(),
-                        },
-                      ].slice(-MAX_ACTIVITY_ITEMS),
+                      activities: [...activities, nextActivity].slice(-MAX_ACTIVITY_ITEMS),
                     };
                   });
                   continue;

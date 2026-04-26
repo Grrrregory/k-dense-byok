@@ -95,6 +95,29 @@ describe("useModels", () => {
     expect(result.current.models.some((m) => m.id.startsWith("chatgpt/"))).toBe(false);
   });
 
+  it("keeps refresh stable across rerenders", async () => {
+    apiFetch.mockImplementation((path: string) => {
+      if (path === "/ollama/models") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ available: false, models: [] }), { status: 200 }),
+        );
+      }
+      if (path === "/chatgpt/models") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ available: false, models: [] }), { status: 200 }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected ${path}`));
+    });
+
+    const { result } = renderHook(() => useModels());
+    const firstRefresh = result.current.refresh;
+
+    await waitFor(() => expect(result.current.chatgptAvailable).toBe(false));
+
+    expect(result.current.refresh).toBe(firstRefresh);
+  });
+
   it("refreshes chatgpt models when a models-changed event fires", async () => {
     let chatgptAvailable = false;
     apiFetch.mockImplementation((path: string) => {

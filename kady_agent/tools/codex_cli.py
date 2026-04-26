@@ -29,6 +29,8 @@ load_dotenv(REPO_ROOT / "kady_agent" / ".env")
 _EXCLUDED_DELIVERABLE_DIRS = {".git", ".gemini", ".kady", ".venv", "__pycache__"}
 _SKILL_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
 _SKILL_LINK_DIRS = ("references", "templates", "scripts", "assets")
+_CODEX_RUN_METADATA = "kady-run.json"
+_STALE_ADHOC_CODEX_HOME_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
 def _resolve_cwd(paths, working_directory: Optional[str]) -> Path:
@@ -237,6 +239,123 @@ def _codex_model_name(model_name: str | None) -> str:
     if isinstance(model_name, str) and model_name.strip():
         return model_name.strip()
     return "gpt-5.4"
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _write_codex_run_metadata(codex_home: Path, run_id: str) -> None:
+    codex_home.mkdir(parents=True, exist_ok=True)
+    try:
+        codex_home.chmod(0o700)
+    except OSError:
+        pass
+    metadata_path = codex_home / _CODEX_RUN_METADATA
+    metadata = {
+        "pid": os.getpid(),
+        "run_id": run_id,
+        "started_at": time.time(),
+    }
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    try:
+        metadata_path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def _adhoc_codex_home_is_stale(
+    codex_home: Path,
+    *,
+    now: float | None = None,
+    max_age_seconds: int = _STALE_ADHOC_CODEX_HOME_MAX_AGE_SECONDS,
+) -> bool:
+    if not (codex_home.name == "adhoc" or codex_home.name.startswith("adhoc-")):
+        return False
+    metadata_path = codex_home / _CODEX_RUN_METADATA
+    current_time = time.time() if now is None else now
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        pid = int(metadata.get("pid") or 0)
+        started_at = float(metadata.get("started_at") or 0.0)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        try:
+            age = current_time - codex_home.stat().st_mtime
+        except OSError:
+            return False
+        return age >= max_age_seconds
+    if not _pid_is_running(pid):
+        return True
+    return False
+
+
+def _path_has_symlink_component(path: Path, *, base: Path) -> bool:
+    try:
+        relative = path.relative_to(base)
+    except ValueError:
+        return True
+    cursor = base
+    for part in relative.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            return True
+    return False
+
+
+def _cleanup_stale_codex_homes(
+    codex_root: Path,
+    *,
+    sandbox_root: Path | None = None,
+    now: float | None = None,
+    max_age_seconds: int = _STALE_ADHOC_CODEX_HOME_MAX_AGE_SECONDS,
+) -> int:
+    removed = 0
+    try:
+        if sandbox_root is not None:
+            sandbox_root = sandbox_root.resolve(strict=True)
+            if _path_has_symlink_component(codex_root, base=sandbox_root):
+                return 0
+        if codex_root.is_symlink() or not codex_root.is_dir():
+            return 0
+        resolved_root = codex_root.resolve(strict=True)
+        if sandbox_root is not None and not resolved_root.is_relative_to(sandbox_root):
+            return 0
+        candidates = list(codex_root.iterdir())
+    except FileNotFoundError:
+        return 0
+    except OSError:
+        return 0
+    for candidate in candidates:
+        try:
+            if candidate.is_symlink() or not candidate.is_dir():
+                continue
+            resolved_candidate = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        if not resolved_candidate.is_relative_to(resolved_root):
+            continue
+        if not _adhoc_codex_home_is_stale(
+            candidate, now=now, max_age_seconds=max_age_seconds
+        ):
+            continue
+        try:
+            shutil.rmtree(candidate)
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+    return removed
 
 
 def _write_codex_auth(codex_home: Path) -> None:
@@ -537,9 +656,12 @@ async def delegate_task(
             path_parts = [p for p in path_parts if p != old_bin]
         env["PATH"] = os.pathsep.join([venv_bin] + path_parts)
 
+    codex_root = paths.kady_dir / "codex-home"
+    _cleanup_stale_codex_homes(codex_root, sandbox_root=paths.sandbox)
     codex_run_id = delegation_id or f"adhoc-{uuid.uuid4().hex}"
-    codex_home = paths.kady_dir / "codex-home" / codex_run_id
+    codex_home = codex_root / codex_run_id
     try:
+        _write_codex_run_metadata(codex_home, codex_run_id)
         _write_codex_auth(codex_home)
         model_name = _codex_model_name(selected_model)
         _write_codex_config(codex_home, cwd, model_name)

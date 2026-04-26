@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import types
 from pathlib import Path
 
@@ -100,6 +101,100 @@ def test_build_selected_skill_prompt_prefix_mentions_exact_paths_and_linked_file
     assert "Before doing anything else, open and follow these skill files" in prefix
     assert "`.gemini/skills/writing/SKILL.md`" in prefix
     assert "`.gemini/skills/writing/references/checklist.md`" in prefix
+
+
+def test_cleanup_stale_codex_homes_removes_only_stale_adhoc_runs(tmp_path: Path):
+    codex_root = tmp_path / "codex-home"
+    stale = codex_root / "adhoc-dead"
+    stale.mkdir(parents=True)
+    (stale / "kady-run.json").write_text(
+        json.dumps({"pid": 0, "run_id": "adhoc-dead", "started_at": 1.0}),
+        encoding="utf-8",
+    )
+    (stale / "auth.json").write_text("{}", encoding="utf-8")
+
+    active = codex_root / "adhoc-active"
+    active.mkdir()
+    (active / "kady-run.json").write_text(
+        json.dumps({"pid": os.getpid(), "run_id": "adhoc-active", "started_at": 2.0}),
+        encoding="utf-8",
+    )
+    (active / "auth.json").write_text("{}", encoding="utf-8")
+
+    no_metadata = codex_root / "adhoc-unknown"
+    no_metadata.mkdir()
+    (no_metadata / "auth.json").write_text("{}", encoding="utf-8")
+    os.utime(no_metadata, (100.0, 100.0))
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_target = outside / "adhoc-link-target"
+    outside_target.mkdir()
+    (outside_target / "kady-run.json").write_text(
+        json.dumps({"pid": 0, "run_id": "adhoc-link-target", "started_at": 1.0}),
+        encoding="utf-8",
+    )
+    (codex_root / "adhoc-link").symlink_to(outside_target, target_is_directory=True)
+
+    session_home = codex_root / "001"
+    session_home.mkdir()
+    (session_home / "kady-run.json").write_text(
+        json.dumps({"pid": 0, "run_id": "001", "started_at": 1.0}),
+        encoding="utf-8",
+    )
+
+    removed = codex_cli._cleanup_stale_codex_homes(
+        codex_root, now=200.0, max_age_seconds=50
+    )
+
+    assert removed == 2
+    assert not stale.exists()
+    assert not no_metadata.exists()
+    assert active.exists()
+    assert session_home.exists()
+    assert outside_target.exists()
+
+
+def test_cleanup_stale_codex_homes_skips_symlinked_root(tmp_path: Path):
+    outside_root = tmp_path / "outside-root"
+    stale = outside_root / "adhoc-dead"
+    stale.mkdir(parents=True)
+    (stale / "kady-run.json").write_text(
+        json.dumps({"pid": 0, "run_id": "adhoc-dead", "started_at": 1.0}),
+        encoding="utf-8",
+    )
+    symlink_root = tmp_path / "codex-home"
+    symlink_root.symlink_to(outside_root, target_is_directory=True)
+
+    removed = codex_cli._cleanup_stale_codex_homes(
+        symlink_root, now=200.0, max_age_seconds=50
+    )
+
+    assert removed == 0
+    assert stale.exists()
+
+
+def test_cleanup_stale_codex_homes_skips_symlinked_ancestor(tmp_path: Path):
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    outside_kady = tmp_path / "outside-kady"
+    stale = outside_kady / "codex-home" / "adhoc-dead"
+    stale.mkdir(parents=True)
+    (stale / "kady-run.json").write_text(
+        json.dumps({"pid": 0, "run_id": "adhoc-dead", "started_at": 1.0}),
+        encoding="utf-8",
+    )
+    (sandbox / ".kady").symlink_to(outside_kady, target_is_directory=True)
+
+    removed = codex_cli._cleanup_stale_codex_homes(
+        sandbox / ".kady" / "codex-home",
+        sandbox_root=sandbox,
+        now=200.0,
+        max_age_seconds=50,
+    )
+
+    assert removed == 0
+    assert stale.exists()
 
 
 async def test_delegate_task_executes_codex_and_records_cost_and_manifest(
@@ -289,6 +384,13 @@ async def test_delegate_task_cleans_codex_home_when_subprocess_start_fails(
 
 async def test_delegate_task_uses_unique_adhoc_codex_home(active_project, monkeypatch):
     ctx = types.SimpleNamespace(state={"_expertModel": "chatgpt/gpt-5.4"})
+    stale_home = active_project.sandbox / ".kady" / "codex-home" / "adhoc-dead"
+    stale_home.mkdir(parents=True)
+    (stale_home / "kady-run.json").write_text(
+        json.dumps({"pid": 0, "run_id": "adhoc-dead", "started_at": 1.0}),
+        encoding="utf-8",
+    )
+    (stale_home / "auth.json").write_text("{}", encoding="utf-8")
 
     monkeypatch.setattr(
         codex_cli,
@@ -322,4 +424,5 @@ async def test_delegate_task_uses_unique_adhoc_codex_home(active_project, monkey
     assert result["result"] == "OK"
     codex_home = Path(called["env"]["CODEX_HOME"])
     assert codex_home.name.startswith("adhoc-")
+    assert not stale_home.exists()
     assert not codex_home.exists()

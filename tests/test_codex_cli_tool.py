@@ -6,6 +6,8 @@ import json
 import types
 from pathlib import Path
 
+import pytest
+
 import kady_agent.tools.codex_cli as codex_cli
 
 
@@ -210,7 +212,7 @@ async def test_delegate_task_executes_codex_and_records_cost_and_manifest(
 
     env = called["env"]
     codex_home = Path(env["CODEX_HOME"])
-    assert not (codex_home / "auth.json").exists()
+    assert not codex_home.exists()
     assert env["KADY_PROJECT_ID"] == active_project.id
     agents_md = (active_project.sandbox / "AGENTS.md")
     assert agents_md.is_file()
@@ -240,3 +242,84 @@ async def test_delegate_task_executes_codex_and_records_cost_and_manifest(
             "project_id": active_project.id,
         }
     ]
+
+
+async def test_delegate_task_cleans_codex_home_when_subprocess_start_fails(
+    active_project, monkeypatch
+):
+    from kady_agent import manifest as manifest_module
+
+    turn_id, _ = await manifest_module.open_turn(
+        session_id="s1", user_text="p", model="chatgpt/gpt-5.4", expert_model="chatgpt/gpt-5.4"
+    )
+    ctx = types.SimpleNamespace(
+        state={
+            "_sessionId": "s1",
+            "_turnId": turn_id,
+            "_expertModel": "chatgpt/gpt-5.4",
+        }
+    )
+
+    monkeypatch.setattr(
+        codex_cli,
+        "resolve_chatgpt_runtime_credentials",
+        lambda **kwargs: {
+            "api_key": "***",
+            "refresh_token": "***",
+            "id_token": "chatgpt-id-token",
+            "account_id": "acct_123",
+            "last_refresh": "2026-04-22T22:19:48.691111Z",
+        },
+    )
+
+    called: dict[str, object] = {}
+
+    async def fake_exec(*args, **kwargs):
+        called["env"] = kwargs.get("env")
+        raise OSError("boom")
+
+    monkeypatch.setattr(codex_cli.asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(OSError, match="boom"):
+        await codex_cli.delegate_task("analyze", tool_context=ctx)
+
+    codex_home = Path(called["env"]["CODEX_HOME"])
+    assert not codex_home.exists()
+
+
+async def test_delegate_task_uses_unique_adhoc_codex_home(active_project, monkeypatch):
+    ctx = types.SimpleNamespace(state={"_expertModel": "chatgpt/gpt-5.4"})
+
+    monkeypatch.setattr(
+        codex_cli,
+        "resolve_chatgpt_runtime_credentials",
+        lambda **kwargs: {
+            "api_key": "***",
+            "refresh_token": "***",
+            "id_token": "chatgpt-id-token",
+            "account_id": "acct_123",
+            "last_refresh": "2026-04-22T22:19:48.691111Z",
+        },
+    )
+
+    called: dict[str, object] = {}
+
+    async def fake_exec(*args, **kwargs):
+        called["env"] = kwargs.get("env")
+        stream = "\n".join(
+            [
+                json.dumps({"type": "thread.started", "thread_id": "thr_123"}),
+                json.dumps({"type": "item.completed", "item": {"id": "item_2", "type": "agent_message", "text": "OK"}}),
+                json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}}),
+            ]
+        ).encode()
+        return _FakeProc(stream)
+
+    monkeypatch.setattr(codex_cli.asyncio, "create_subprocess_exec", fake_exec)
+
+    result = await codex_cli.delegate_task("analyze", tool_context=ctx)
+
+    assert result["result"] == "OK"
+    codex_home = Path(called["env"]["CODEX_HOME"])
+    assert codex_home.name.startswith("adhoc-")
+    assert not codex_home.exists()

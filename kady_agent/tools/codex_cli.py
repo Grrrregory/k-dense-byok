@@ -4,8 +4,10 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
@@ -262,9 +264,9 @@ def _write_codex_auth(codex_home: Path) -> None:
         pass
 
 
-def _remove_codex_auth(codex_home: Path) -> None:
+def _remove_codex_home(codex_home: Path) -> None:
     try:
-        (codex_home / "auth.json").unlink()
+        shutil.rmtree(codex_home)
     except FileNotFoundError:
         return
     except OSError:
@@ -349,7 +351,17 @@ def _write_codex_config(codex_home: Path, cwd: Path, model_name: str) -> None:
     ]
     for name, spec in _codex_mcp_config().items():
         _append_table(lines, f"mcp_servers.{name}", spec)
-    (codex_home / "config.toml").write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    codex_home.mkdir(parents=True, exist_ok=True)
+    try:
+        codex_home.chmod(0o700)
+    except OSError:
+        pass
+    config_path = codex_home / "config.toml"
+    config_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    try:
+        config_path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def _parse_exec_json(raw: str) -> dict[str, Any]:
@@ -525,7 +537,8 @@ async def delegate_task(
             path_parts = [p for p in path_parts if p != old_bin]
         env["PATH"] = os.pathsep.join([venv_bin] + path_parts)
 
-    codex_home = paths.kady_dir / "codex-home" / (delegation_id or "adhoc")
+    codex_run_id = delegation_id or f"adhoc-{uuid.uuid4().hex}"
+    codex_home = paths.kady_dir / "codex-home" / codex_run_id
     try:
         _write_codex_auth(codex_home)
         model_name = _codex_model_name(selected_model)
@@ -556,7 +569,7 @@ async def delegate_task(
         )
         stdout_bytes, stderr_bytes = await proc.communicate()
     finally:
-        _remove_codex_auth(codex_home)
+        _remove_codex_home(codex_home)
     duration_ms = int((time.time() - started_at) * 1000)
 
     raw = stdout_bytes.decode(errors="replace")

@@ -262,4 +262,18 @@ def test_refresh_chatgpt_tokens_raises_on_non_200(auth_path: Path, monkeypatch: 
     monkeypatch.setattr("kady_agent.chatgpt_auth.httpx.Client", lambda *a, **kw: _MockClient())
 
     with pytest.raises(ChatGPTAuthError):
-        refresh_chatgpt_tokens({"access_token": "bad", "refresh_token": "bad"})
+        refresh_chatgpt_tokens({"access_token": "***", "refresh_token": "***"})
+
+
+def test_clear_codex_auth_artifacts_removes_runtime_tree(tmp_path: Path):
+    from kady_agent.chatgpt_auth import clear_codex_auth_artifacts
+
+    codex_home = tmp_path / "projects" / "demo" / "sandbox" / ".kady" / "codex-home" / "001"
+    codex_home.mkdir(parents=True)
+    (codex_home / "auth.json").write_text("{}", encoding="utf-8")
+    (codex_home / "config.toml").write_text("model = \"gpt-5.4\"\n", encoding="utf-8")
+
+    removed = clear_codex_auth_artifacts(tmp_path)
+
+    assert removed == 1
+    assert not (tmp_path / "projects" / "demo" / "sandbox" / ".kady" / "codex-home").exists()

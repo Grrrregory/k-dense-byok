@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shutil
 import threading
 import time
 from contextlib import contextmanager
@@ -446,9 +447,11 @@ def clear_chatgpt_tokens() -> None:
 def clear_codex_auth_artifacts(repo_root: Path | None = None) -> int:
     root = (repo_root or Path(__file__).resolve().parents[1]).resolve()
     removed = 0
-    for auth_path in root.glob("projects/*/sandbox/.kady/codex-home/**/auth.json"):
+    for codex_root in root.glob("projects/*/sandbox/.kady/codex-home"):
         try:
-            auth_path.unlink()
+            if not codex_root.exists():
+                continue
+            shutil.rmtree(codex_root)
             removed += 1
         except FileNotFoundError:
             continue

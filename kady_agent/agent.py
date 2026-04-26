@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from contextvars import ContextVar
 from typing import Any
 
 import httpx
@@ -9,6 +10,7 @@ from dotenv import load_dotenv
 from google.adk.agents import LlmAgent
 from google.adk.models.lite_llm import LiteLlm
 from litellm.integrations.custom_logger import CustomLogger
+from .chatgpt_auth import resolve_chatgpt_runtime_credentials
 from .cost_ledger import extract_cost_tags, record_cost, update_cost_entry
 from .mcps import all_mcps
 from .manifest import close_turn, open_turn
@@ -37,8 +39,36 @@ DEFAULT_EXPERT_MODEL = (
 )
 EXTRA_HEADERS = {"X-Title": "Kady", "HTTP-Referer": "https://www.k-dense.ai"}
 PARALLEL_API_KEY = os.getenv("PARALLEL_API_KEY")
+_REQUEST_ADDITIONAL_ARGS: ContextVar[dict[str, Any] | None] = ContextVar(
+    "kady_request_additional_args",
+    default=None,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class RequestScopedLiteLlm(LiteLlm):
+    """LiteLlm wrapper that applies per-request kwargs without global bleed."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._request_lock = asyncio.Lock()
+
+    async def generate_content_async(self, llm_request, stream: bool = False):
+        request_args = dict(_REQUEST_ADDITIONAL_ARGS.get() or {})
+        async with self._request_lock:
+            original_args = dict(self._additional_args)
+            try:
+                merged_args = dict(original_args)
+                merged_args.update(request_args)
+                self._additional_args = merged_args
+                async for response in super().generate_content_async(
+                    llm_request, stream=stream
+                ):
+                    yield response
+            finally:
+                self._additional_args = original_args
+                _REQUEST_ADDITIONAL_ARGS.set(None)
 
 
 async def _fetch_openrouter_generation_cost(gen_id: str) -> float | None:
@@ -105,64 +135,68 @@ def _build_instruction() -> str:
     return base + format_skills_reference(skills)
 
 
-def _inject_tracking_headers(callback_context):
-    """Stamp the orchestrator's LLM call with Kady correlation headers.
+def _is_openrouter_model(model_name: str | None) -> bool:
+    return isinstance(model_name, str) and model_name.startswith("openrouter/")
 
-    OpenRouter ignores unknown ``X-*`` headers, so this is safe. The
-    LiteLLM success callback reads these back out of ``optional_params
-    .extra_headers`` to correlate cost entries with the right session/turn
-    in ``costs.jsonl``.
-    """
+
+def _is_chatgpt_model(model_name: str | None) -> bool:
+    return isinstance(model_name, str) and model_name.startswith("chatgpt/")
+
+
+def _request_provider_credentials(model_name: str | None) -> dict[str, Any]:
+    if _is_chatgpt_model(model_name):
+        creds = resolve_chatgpt_runtime_credentials()
+        return {
+            "api_key": creds["api_key"],
+            "api_base": creds["base_url"],
+            "custom_llm_provider": "chatgpt",
+        }
+    return {}
+
+
+def _request_tracking_args(callback_context, model_name: str | None = None) -> dict[str, Any]:
+    """Build per-request LiteLLM args for provenance/cost correlation."""
     state = callback_context.state
-    merged = dict(EXTRA_HEADERS)
-    merged["X-Kady-Role"] = "orchestrator"
     session_id = state.get("_sessionId")
     turn_id = state.get("_turnId")
-    if session_id:
-        merged["X-Kady-Session-Id"] = session_id
-    if turn_id:
-        merged["X-Kady-Turn-Id"] = turn_id
     try:
         project_id = projects.current_project_id()
     except LookupError:
         project_id = None
-    if project_id:
-        merged["X-Kady-Project"] = project_id
 
-    # ``_additional_args`` is the LiteLlm-owned kwargs bag that gets
-    # forwarded verbatim into ``litellm.acompletion``. Mutating it here
-    # is safe because ADK serializes model calls per agent invocation.
-    _LITELLM_MODEL._additional_args["extra_headers"] = merged
-
-    # ``extra_headers`` is dropped from the LiteLLM success-callback
-    # ``kwargs`` on some provider paths, so stash the same correlation IDs
-    # in ``metadata`` -- LiteLLM forwards user-supplied metadata through
-    # ``kwargs["litellm_params"]["metadata"]`` verbatim.
-    existing_meta = _LITELLM_MODEL._additional_args.get("metadata")
-    meta = dict(existing_meta) if isinstance(existing_meta, dict) else {}
-    meta["kady_role"] = "orchestrator"
+    meta = {
+        "kady_role": "orchestrator",
+    }
     if session_id:
         meta["kady_session_id"] = session_id
     if turn_id:
         meta["kady_turn_id"] = turn_id
     if project_id:
         meta["kady_project"] = project_id
-    _LITELLM_MODEL._additional_args["metadata"] = meta
 
-    # Ask OpenRouter to include native usage accounting (token counts +
-    # dollar cost) in the streamed response. See:
-    # https://openrouter.ai/docs/guides/administration/usage-accounting
-    existing_extra_body = _LITELLM_MODEL._additional_args.get("extra_body")
-    extra_body = dict(existing_extra_body) if isinstance(existing_extra_body, dict) else {}
-    extra_body["usage"] = {"include": True}
-    _LITELLM_MODEL._additional_args["extra_body"] = extra_body
+    scoped_args: dict[str, Any] = {"metadata": meta}
+    if _is_openrouter_model(model_name):
+        headers = dict(EXTRA_HEADERS)
+        headers["X-Kady-Role"] = "orchestrator"
+        if session_id:
+            headers["X-Kady-Session-Id"] = session_id
+        if turn_id:
+            headers["X-Kady-Turn-Id"] = turn_id
+        if project_id:
+            headers["X-Kady-Project"] = project_id
+        scoped_args["extra_headers"] = headers
+        scoped_args["extra_body"] = {"usage": {"include": True}}
+    return scoped_args
 
 
 def _override_model(callback_context, llm_request):
     override = callback_context.state.get("_model")
     if override:
         llm_request.model = override
-    _inject_tracking_headers(callback_context)
+    model_name = llm_request.model or DEFAULT_MODEL
+    scoped_args = _request_tracking_args(callback_context, model_name)
+    scoped_args.update(_request_provider_credentials(model_name))
+    _REQUEST_ADDITIONAL_ARGS.set(scoped_args)
     return None
 
 
@@ -235,7 +269,7 @@ async def _close_turn_manifest(callback_context):
     return None
 
 
-_LITELLM_MODEL = LiteLlm(
+_LITELLM_MODEL = RequestScopedLiteLlm(
     model=DEFAULT_MODEL,
     extra_headers=EXTRA_HEADERS,
 )
@@ -341,7 +375,7 @@ class _OrchestratorCostLogger(CustomLogger):
             if not tags.get("session_id") or not tags.get("turn_id"):
                 return (None, None, None)
             provider = kwargs.get("custom_llm_provider")
-            if provider != "openrouter":
+            if provider not in {"openrouter", "chatgpt"}:
                 return (None, None, None)
             lparams = kwargs.get("litellm_params") or {}
             # LiteLLM strips the ``openrouter/`` prefix at logging time,
@@ -357,6 +391,9 @@ class _OrchestratorCostLogger(CustomLogger):
             if usage is None and isinstance(response_obj, dict):
                 usage = response_obj.get("usage")
             cost, gen_id = self._extract_cost_and_gen_id(kwargs, response_obj)
+            if provider == "chatgpt":
+                cost = 0.0 if cost is None else float(cost)
+                gen_id = None
             entry_id = record_cost(
                 session_id=tags["session_id"],
                 turn_id=tags["turn_id"],

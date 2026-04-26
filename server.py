@@ -5,6 +5,8 @@ import mimetypes
 import os
 import re
 import shutil
+import time
+import uuid
 import zipfile
 from datetime import datetime, timezone
 from email.utils import format_datetime, parsedate_to_datetime
@@ -36,6 +38,17 @@ from kady_agent.anndata_preview import (
     summarize_h5ad,
 )
 from kady_agent.citations import report_to_dict, verify_text_and_files
+from kady_agent.chatgpt_auth import (
+    clear_chatgpt_tokens,
+    clear_codex_auth_artifacts,
+    exchange_chatgpt_authorization_code,
+    get_chatgpt_auth_status,
+    poll_chatgpt_device_code,
+    request_chatgpt_device_code,
+    resolve_chatgpt_runtime_credentials,
+    save_chatgpt_tokens,
+)
+from kady_agent.chatgpt_models import list_chatgpt_models
 from kady_agent.gemini_settings import (
     load_browser_use_config,
     load_custom_mcps,
@@ -85,6 +98,8 @@ _artifact_service = create_artifact_service_from_options(
     use_local_storage=True,
 )
 _credential_service = InMemoryCredentialService()
+_CHATGPT_LOGIN_SESSIONS: dict[str, dict] = {}
+_CHATGPT_LOGIN_MAX_AGE_SECONDS = 15 * 60
 
 _adk_web_server = AdkWebServer(
     agent_loader=_agent_loader,
@@ -136,8 +151,9 @@ async def project_scope(request: Request, call_next):
 
 app.include_router(projects_router)
 
-
+_CHATGPT_LOGIN_MAX_AGE_SECONDS = 15 * 60
 _ZIP_EXCLUDED_NAMES = {"GEMINI.md", "uv.lock"}
+_PROTECTED_SANDBOX_PREFIXES = {".kady", ".gemini", ".venv", "__pycache__"}
 
 
 def _safe_path(rel: str) -> Path:
@@ -145,6 +161,12 @@ def _safe_path(rel: str) -> Path:
     target = (sandbox_root / rel).resolve()
     if not target.is_relative_to(sandbox_root):
         raise HTTPException(status_code=403, detail="Path traversal denied")
+    try:
+        relative = target.relative_to(sandbox_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path traversal denied")
+    if any(part in _PROTECTED_SANDBOX_PREFIXES for part in relative.parts):
+        raise HTTPException(status_code=403, detail="Protected sandbox path")
     return target
 
 
@@ -161,6 +183,108 @@ async def config():
     return {
         "modal_configured": bool(modal_id and modal_secret),
     }
+
+
+@app.get("/settings/chatgpt/status")
+async def get_chatgpt_status():
+    """Return ChatGPT Pro auth status plus discovered-model count."""
+    status = dict(get_chatgpt_auth_status())
+    models: list[dict] = []
+    if status.get("authenticated"):
+        try:
+            models = list_chatgpt_models(strict=True)
+            status = dict(get_chatgpt_auth_status())
+        except Exception as exc:
+            status["error"] = str(exc)
+            try:
+                models = list_chatgpt_models(strict=False)
+            except Exception:
+                models = []
+    return {
+        "authenticated": bool(status.get("authenticated")),
+        "accountId": status.get("accountId"),
+        "lastRefresh": status.get("lastRefresh"),
+        "modelsAvailable": len(models),
+        "error": status.get("error"),
+    }
+
+
+@app.get("/chatgpt/models")
+async def get_chatgpt_models():
+    """Return discovered ChatGPT models when the user is authenticated."""
+    status = get_chatgpt_auth_status()
+    if not status.get("authenticated"):
+        return {"available": False, "models": []}
+    try:
+        return {"available": True, "models": list_chatgpt_models(strict=True)}
+    except Exception as exc:
+        try:
+            models = list_chatgpt_models(strict=False)
+        except Exception:
+            return {"available": False, "models": []}
+        return {
+            "available": bool(models),
+            "models": models,
+            "error": str(exc),
+            "degraded": True,
+        }
+
+
+@app.post("/settings/chatgpt/login/start")
+async def start_chatgpt_login():
+    """Start the ChatGPT device-code flow and return a poll token."""
+    pending = request_chatgpt_device_code()
+    login_session_id = str(uuid.uuid4())
+    _CHATGPT_LOGIN_SESSIONS[login_session_id] = dict(pending)
+    return {
+        "loginSessionId": login_session_id,
+        "verificationUri": pending["verification_uri"],
+        "userCode": pending["user_code"],
+        "pollIntervalSeconds": int(pending.get("interval", 5) or 5),
+    }
+
+
+@app.post("/settings/chatgpt/login/poll")
+async def poll_chatgpt_login(request: Request):
+    """Poll a ChatGPT device-code session until it finishes or stays pending."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected a JSON object")
+    login_session_id = str(body.get("loginSessionId", "") or "").strip()
+    if not login_session_id:
+        raise HTTPException(status_code=400, detail="Missing loginSessionId")
+    pending = _CHATGPT_LOGIN_SESSIONS.get(login_session_id)
+    if not pending:
+        raise HTTPException(status_code=404, detail="Login session not found")
+    requested_at = float(pending.get("requested_at") or 0.0)
+    if requested_at and (time.time() - requested_at) > _CHATGPT_LOGIN_MAX_AGE_SECONDS:
+        _CHATGPT_LOGIN_SESSIONS.pop(login_session_id, None)
+        raise HTTPException(status_code=410, detail="Login session expired")
+
+    auth_code = poll_chatgpt_device_code(
+        pending["device_auth_id"], pending["user_code"]
+    )
+    if auth_code is None:
+        return {"status": "pending"}
+
+    tokens = exchange_chatgpt_authorization_code(
+        auth_code["authorization_code"], auth_code["code_verifier"]
+    )
+    save_chatgpt_tokens(tokens)
+    _CHATGPT_LOGIN_SESSIONS.pop(login_session_id, None)
+    return {"status": "authenticated", "auth": get_chatgpt_auth_status()}
+
+
+@app.delete("/settings/chatgpt/auth")
+async def delete_chatgpt_auth():
+    """Clear ChatGPT auth state."""
+    clear_chatgpt_tokens()
+    clear_codex_auth_artifacts()
+    _CHATGPT_LOGIN_SESSIONS.clear()
+    return {"ok": True}
 
 
 def _format_ollama_bytes(n: int) -> str:
@@ -1072,16 +1196,22 @@ async def revise_markdown(request: Request):
     user_message = "\n\n".join(user_message_parts)
 
     try:
-        response = await litellm.acompletion(
-            model=model,
-            messages=[
+        call_kwargs = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": _REVISE_SYSTEM_PROMPT},
                 {"role": "user", "content": user_message},
             ],
-            extra_headers=EXTRA_HEADERS,
-            temperature=0.2,
-            timeout=120,
-        )
+            "extra_headers": EXTRA_HEADERS,
+            "temperature": 0.2,
+            "timeout": 120,
+        }
+        if isinstance(model, str) and model.startswith("chatgpt/"):
+            creds = resolve_chatgpt_runtime_credentials()
+            call_kwargs["api_key"] = creds["api_key"]
+            call_kwargs["api_base"] = creds["base_url"]
+            call_kwargs["custom_llm_provider"] = "chatgpt"
+        response = await litellm.acompletion(**call_kwargs)
     except Exception as exc:  # noqa: BLE001 — surface upstream errors verbatim
         raise HTTPException(status_code=502, detail=f"Model call failed: {exc}")
 

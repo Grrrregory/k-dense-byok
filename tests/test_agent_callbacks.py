@@ -186,6 +186,27 @@ def test_record_skips_non_openrouter_provider(active_project):
     )
 
 
+def test_record_keeps_chatgpt_usage_with_zero_cost(active_project):
+    logger = agent_module._OrchestratorCostLogger()
+    kwargs = _orchestrator_kwargs(project=active_project.id)
+    kwargs["custom_llm_provider"] = "chatgpt"
+    kwargs["model"] = "chatgpt/gpt-5.4"
+    kwargs["litellm_params"]["metadata"]["hidden_params"]["litellm_model_name"] = "chatgpt/gpt-5.4"
+    response = types.SimpleNamespace(
+        id="chatgpt-resp-1",
+        usage=types.SimpleNamespace(prompt_tokens=11, completion_tokens=7, total_tokens=18),
+    )
+
+    entry_id, gen_id, project_id = logger._record(kwargs, response)
+
+    assert entry_id is not None
+    assert gen_id is None
+    assert project_id == active_project.id
+    summary = cost_ledger.read_costs("s1", project_id=active_project.id)
+    assert summary["entries"][0]["model"] == "chatgpt/gpt-5.4"
+    assert summary["entries"][0]["costUsd"] == 0.0
+
+
 # ---------------------------------------------------------------------------
 # _fetch_openrouter_generation_cost
 # ---------------------------------------------------------------------------

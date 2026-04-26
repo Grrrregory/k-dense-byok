@@ -48,6 +48,7 @@ vertex_ai_credentials.json
 # AI / Agent
 .adk/
 .gemini/
+kady_agent/.chatgpt/
 AGENTS.md
 
 # Testing
